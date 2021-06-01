@@ -55,12 +55,16 @@ async def on_message(event):
             except:
                 name = "**An exception has occurred fetching the origin channel.**"
 
-            
-
         webhookmsg += f"{event.message.message}"
 
         if event.message.file and not event.message.web_preview:
-            mfp = f'{event.chat.id}-{event.message.id}{event.message.file.ext}'
+            if event.message.file.ext == ".jpe":
+                mfpext = ".jpg"
+            else:
+                mfpext = event.message.file.ext
+
+            mfp = f'{event.chat.id}-{event.message.id}{mfpext}'
+
             with open(config['telegram']['files_dir']+mfp, 'wb') as f:
                 async for chunk in client.iter_download(event.message.file.media):
                     f.write(chunk)
