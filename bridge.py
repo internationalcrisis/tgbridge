@@ -7,26 +7,12 @@ import yaml
 import aiohttp
 import os
 import logging
-logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
-                    level=logging.WARNING)
+logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.WARNING)
 
 config = yaml.safe_load(open('config.yml'))
 
-# Use your own values from my.telegram.org
-api_id = ***REMOVED***
-api_hash = '***REMOVED***'
-
-config['telegram']['base_url'] = "https://ccrda.us/tgbridge/" # TODO: handle trailing slash
-config['telegram']['files_dir'] = "files/" # TODO: handle trailing slash
-
-
-loggedchats = [
-    ***REMOVED***
-    ***REMOVED***
-    ***REMOVED***
-    ***REMOVED***
-    ***REMOVED***
-]
+#config['telegram']['base_url'] = "https://ccrda.us/tgbridge/" # TODO: handle trailing slash
+#config['telegram']['files_dir'] = "files/" # TODO: handle trailing slash
 
 # The first parameter is the .session file name (absolute paths allowed)
 client = TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
@@ -36,7 +22,7 @@ async def on_message(event):
     async with aiohttp.ClientSession() as session:
         webhookmsg = ''
 
-        ifp = f"{event.chat.id}.jpg"
+        ifp = f"{event.chat.id}.jpg" # Channel icons can be assumed to be JPEGs for the foreseeable future.
         if not os.path.exists(ifp) and not isinstance(event.chat.photo, telethon.types.ChatPhotoEmpty):
             await client.download_profile_photo(event.chat, file=config['telegram']['files_dir']+ifp)
 

@@ -1,0 +1,64 @@
+---
+- name: Telegram Bridge Deployment
+  hosts: tgbridge
+  vars:
+    pip_executable: /usr/bin/pip3
+    deployment_destination: /home/winter/repository
+    deployment_repo: "***REMOVED***"
+
+  tasks:
+  - name: Debian Prerequisites
+    block:
+      - name: python3 must be installed.
+        ansible.builtin.apt:
+          name: python3
+          state: latest
+
+      - name: python3-pip must be installed.
+        ansible.builtin.apt:
+          name: python3-pip
+          state: latest
+      
+      - name: Install Python module telethon
+        ansible.builtin.pip:
+          executable: "{{ pip_executable }}"
+          name: telethon
+          state: latest
+
+      - name: Install Python module discord.py
+        ansible.builtin.pip:
+          executable: "{{ pip_executable }}"
+          name: discord.py
+          state: latest
+
+      - name: Install Python module pyyaml
+        ansible.builtin.pip:
+          executable: "{{ pip_executable }}"
+          name: pyyaml
+          state: latest
+    
+    when: ansible_facts['distribution'] == 'Debian'
+    become: yes
+
+  - name: Deployment
+    block:
+      - name: Deploy Telegram Bridge from repository
+        ansible.builtin.git:
+          repo: "{{ deployment_repo }}"
+          dest: "{{ deployment_destination }}"
+
+      - name: Copy config.yml to remote
+        ansible.builtin.copy:
+          src: ./config.yml
+          dest: "{{ deployment_destination }}/config.yml"
+          
+    become: yes
+
+  - name: Specialized Setup
+    block:
+      - name: Create symlink to webroot
+        ansible.builtin.file:
+          src: /var/www/html/telegram/
+          dest: "{{ deployment_destination }}/files"
+    
+    become: yes
