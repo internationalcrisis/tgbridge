@@ -8,6 +8,8 @@ import aiohttp
 import os
 import logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.WARNING)
+logger = logging.getLogger('bridge')
+logger.setLevel(logging.DEBUG)
 
 config = yaml.safe_load(open('config.yml'))
 
@@ -17,8 +19,31 @@ config = yaml.safe_load(open('config.yml'))
 # The first parameter is the .session file name (absolute paths allowed)
 client = TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
 
-@client.on(events.NewMessage(chats=config['telegram']['watched']))
+def is_watched(event, webhook: str):
+    """Check if a Discord webhook is watching the chat ID a Telegram message is from."""
+    try:
+        if str(event.chat.id) in str(config['webhooks'][webhook]['watched']):
+            logger.debug(f'Message from {event.chat.id} is explicitly watched and will be forwarded to {webhook}')
+            return True
+    except KeyError:
+        pass
+
+    try:
+        for watchgroup in config['webhooks'][webhook]['watchgroups']:
+            if str(event.chat.id) in str(config['telegram']['watchgroups'][watchgroup]):
+                logger.debug(f'Message from {event.chat.id} is watched by the watchgroup {watchgroup} and will be forwarded to {webhook}')
+                return True
+    except KeyError:
+        pass
+
+    return False
+
+@client.on(events.NewMessage())
 async def on_message(event):
+    for webhook in config['webhooks']:
+        if not is_watched(event, webhook):
+            return
+
     async with aiohttp.ClientSession() as session:
         webhookmsg = ''
 
@@ -57,7 +82,7 @@ async def on_message(event):
             
             webhookmsg += f'\n\n{config["telegram"]["base_url"]}{mfp}'
 
-        webhook = Webhook.from_url(config['discord']['webhookurl'], adapter=AsyncWebhookAdapter(session))
+        webhook = Webhook.from_url(config['webhooks'][webhook]['url'], adapter=AsyncWebhookAdapter(session))
         # coroutine to get self is in parenthesis so .id runs on the result of awaiting it
         if not isinstance(event.chat, telethon.types.User):
             await webhook.send(webhookmsg, username=f'{event.chat.title}', avatar_url=config['telegram']['base_url']+ifp)

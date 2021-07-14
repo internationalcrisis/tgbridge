@@ -60,5 +60,10 @@
         ansible.builtin.file:
           src: /var/www/html/telegram/
           dest: "{{ deployment_destination }}/files"
+
+      - name: Restart supervisord-controlled application
+        community.general.supervisorctl:
+          name: tgbridge
+          state: restarted
     
     become: yes
