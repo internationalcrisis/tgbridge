@@ -1,2 +1,4 @@
 files/
+__pycache__/
 config.yml
+.idea
