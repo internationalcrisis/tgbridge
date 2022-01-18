@@ -118,7 +118,7 @@ async def on_message(client, message):
                 if message.media == "photo":
                     filename = f"{message.chat.id}-{message.message_id}.jpg"
                 else:
-                    filename = f"{message.chat.id}-{message.message_id}{mimetypes.guess_extension(message[message.media].mime_type)}"
+                    filename = f"{message.chat.id}-{message.message_id}{os.path.splitext(message[message.media].file_name)[1]}"
                 # equates to something like files/-1001427017788-357.mp4
                 await message.download(file_name=config['telegram']['files_dir']+filename)
 
