@@ -90,9 +90,12 @@ async def on_message(client, message):
                 elif message.forward_from_chat: # forwarded from chat
                     if message.forward_from_chat.title:
                         fwname = f"Forwarded from {message.forward_from_chat.title}"
+                    elif message.forward_from.first_name and message.forward_from.last_name:
+                        fwname = f'Forwarded from {message.forward_from_chat.first_name} {message.forward_from_chat.last_name or ""}'
                     else:
                         # WARN: may or may not work for chats
-                        fwname = f'Forwarded from {message.forward_from_chat.first_name+" " or " "}{message.forward_from_chat.last_name or ""}'
+                        fwname = "Forwarded from "+str(message.forward_from.first_name)
+                        fwname += " "+str(message.forward_from_chat.last_name) if message.forward_from_chat.last_name else "" # formatted last name
 
                 elif message.forward_sender_name:  # forwarded from hidden account's comment
                     fwname = f'Forwarded from {message.forward_sender_name} (Hidden Account)'
