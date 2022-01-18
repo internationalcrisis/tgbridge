@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+sqlalchemy = "*"
+flask = "*"
+flask-admin = "*"
+pyyaml = "*"
+telethon = "*"
+"discord.py" = "*"
+aiohttp = "*"
+rich = "*"
+prompt-toolkit = "*"
+psycopg2 = "*"
+pyrogram = "*"
+sync = "*"
+py-cord = "*"
+tgcrypto = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.10"

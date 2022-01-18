@@ -10,7 +10,7 @@ from inspect import cleandoc
 import yaml
 import aiohttp
 
-config = yaml.safe_load(open('config.yml'))
+config = yaml.safe_load(open('config.yml', mode="r"))
 
 sqlengine = create_engine(config['dburl'])
 sqlsessionmaker = sessionmaker(bind=sqlengine)
