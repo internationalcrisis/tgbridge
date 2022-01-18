@@ -61,7 +61,7 @@ def is_watched(message):
     return outhooks
 
 # TODO: better path handling with pathlib
-@tgclient.on_message()
+@tgclient.on_message(~pyrogram.filters.edited)
 async def on_message(client, message):
     if message.sender_chat == 777000 or message.chat == 777000:
         return # don't send anything from official telegram system channel either
