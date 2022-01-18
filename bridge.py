@@ -81,18 +81,23 @@ async def on_message(client, message):
             # forward handling
             try:
                 if message.forward_from: # forwarded from user
-                    fwname = f'Forwarded from {message.forward_from.first_name} {message.forward_from.last_name} (@{message.forward_from.username})'
+                    if message.forward_from.first_name and message.forward_from.last_name:
+                        fwname = f'Forwarded from {message.forward_from.first_name} {message.forward_from.last_name or ""}'
+                    else:
+                        fwname = "Forwarded from "+str(message.forward_from.first_name)
+                        fwname += " "+str(message.forward_from.last_name) if message.forward_from.last_name else "" # formatted last name
 
                 elif message.forward_from_chat: # forwarded from chat
                     if message.forward_from_chat.title:
                         fwname = f"Forwarded from {message.forward_from_chat.title}"
                     else:
                         # WARN: may or may not work for chats
-                        fwname = f'Forwarded from {message.forward_from_chat.first_name} {message.forward_from_chat.last_name}'
+                        fwname = f'Forwarded from {message.forward_from_chat.first_name+" " or " "}{message.forward_from_chat.last_name or ""}'
 
                 elif message.forward_sender_name:  # forwarded from hidden account's comment
                     fwname = f'Forwarded from {message.forward_sender_name} (Hidden Account)'
             except:
+                raise
                 fwname = "**An exception has occurred fetching the origin channel.**"
 
             if fwname != None:
@@ -104,12 +109,18 @@ async def on_message(client, message):
 
             # file download handling
             # message.media tells us the type of media to get attributes of
-            if message.media and message.media != "web_page":
-                filename = f"{message.chat.id}-{message.message_id}{mimetypes.guess_extension(message[message.media].mime_type)}"
+            # photos do not have a mime-type
+            if message.media and message.media not in ["web_page"]:
+                # Photos dont have mime_type, but are always JPEGs.
+                if message.media == "photo":
+                    filename = f"{message.chat.id}-{message.message_id}.jpg"
+                else:
+                    filename = f"{message.chat.id}-{message.message_id}{mimetypes.guess_extension(message[message.media].mime_type)}"
                 # equates to something like files/-1001427017788-357.mp4
                 await message.download(file_name=config['telegram']['files_dir']+filename)
 
                 webhookmsg += f'\n\n{config["telegram"]["base_url"]}{filename}'
+
 
             # final webhook request handling
             username = message.chat.title if message.chat.title else f'{message.chat.first_name} {message.chat.last_name}'
@@ -125,7 +136,15 @@ async def main():
     # TODO: change names of channels if they dont match since previous start
     # TODO: listen for channel leaves/joins/renames and react accordingly
     async for dialog in tgclient.iter_dialogs():
-        chname = dialog.chat.title if dialog.chat.title else f'{dialog.chat.first_name} {dialog.chat.last_name}'
+        chname = ''
+        if dialog.chat.title:
+            chname = dialog.chat.title
+        elif dialog.chat.first_name and dialog.chat.last_name:
+            chname = f'{dialog.chat.first_name} {dialog.chat.last_name or ""}'
+        else:
+            # first name and/or last name is not available
+            chname = dialog.chat.first_name
+            chname += " "+str(dialog.chat.last_name) if dialog.chat.last_name else "" # formatted last name
 
         if session.query(TelegramChannel).filter(TelegramChannel.id == dialog.chat.id).count() == 0:
             if int(dialog.chat.id) == 777000:  # do not add the Telegram system channel to the database at all
@@ -139,7 +158,7 @@ async def main():
             channel = session.query(TelegramChannel).filter(TelegramChannel.id == dialog.chat.id).one()
             if channel.name != chname:
                 channel.name = chname
-                print(f'Channel {chname} was renamed on Telegram, renaming to {channel.name} in database.')
+                print(f'Channel {chname} was renamed in Telegram, renaming to {channel.name} in database.')
                 session.add(channel)
                 session.commit()
     else:
