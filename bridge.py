@@ -1,11 +1,9 @@
 import asyncio
-# from telethon import TelegramClient, events
-# import telethon
-import pyrogram
+from telethon import TelegramClient, events
+import telethon
 from discord import Webhook, AsyncWebhookAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from console import climain
 import yaml
 import aiohttp
 import os
@@ -24,22 +22,17 @@ config = yaml.safe_load(open('config.yml'))
 sqlengine = create_engine(config['dburl'])
 sqlsessionmaker = sessionmaker(bind=sqlengine)
 
-from models import db, Webhook as DBWebhook, TelegramChannel, Watchgroup
+from models import db, Webhook as DBWebhook, TelegramChannel, Watchgroup, TelegramMessage, DiscordMessage
 # db.metadata.drop_all(sqlengine)
 db.metadata.create_all(sqlengine)
 
-#config['telegram']['base_url'] = "https://ccrda.us/tgbridge/" # TODO: handle trailing slash
-#config['telegram']['files_dir'] = "files/" # TODO: handle trailing slash
-
-loop = asyncio.get_event_loop()
-
-tgclient = pyrogram.Client(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
+tgclient = telethon.TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
 
 def is_watched(message):
     session = sqlsessionmaker()
 
     try:
-        channel = session.query(TelegramChannel).filter(TelegramChannel.id == int(message.chat.id)).one()
+        channel = session.query(TelegramChannel).filter(TelegramChannel.id == int(message.chat_id)).one()
     except sqlalchemy.exc.NoResultFound:
         return []
 
@@ -60,123 +53,148 @@ def is_watched(message):
     session.close()
     return outhooks
 
+# @tgclient.on_disconnect()
+# async def on_disconnect(client):
+    # logger.warning("Pyrogram client was disconnected.")
+
 # TODO: better path handling with pathlib
-@tgclient.on_message(~pyrogram.filters.edited)
-async def on_message(client, message):
-    if message.sender_chat == 777000 or message.chat == 777000:
+@tgclient.on(events.NewMessage())
+async def on_message(event):
+    sqlsession = sqlsessionmaker()
+    chat = await event.get_chat()
+
+    if event.chat_id == 777000 or event.sender_id == 777000:
         return # don't send anything from official telegram system channel either
 
-    whurls = [webhook.url for webhook in is_watched(message)] # get webhooks that are interested in this message
+    # if no TelegramMessage wxith this message id and channel id exists, create one.
+    tmsg = sqlsession.query(TelegramMessage).filter(TelegramMessage.messageid == event.message.id, TelegramMessage.channelid == event.chat_id).one_or_none()
+    if tmsg is None:
+        tmsg = TelegramMessage(messageid=event.message.id, channelid=event.chat_id)
+        sqlsession.add(tmsg)
+        sqlsession.commit()
+    else:
+        # this message MAY have been processed before, but check webhooks anyway
+        logger.warning(f"Telegram message with message id {tmsg.messageid} and chat id {tmsg.channelid} has been processed before")
 
-    for webhook in whurls:
+    webhooks = [webhook for webhook in is_watched(event)] # get webhooks that are interested in this message
+
+    for webhook in webhooks:
         async with aiohttp.ClientSession() as session:
+            if sqlsession.query(DiscordMessage).filter(DiscordMessage.tgmessageid == tmsg.id, DiscordMessage.webhookid == webhook.id).count() >= 1:
+                logger.error(f"Webhook with id {webhook.id} has already sent Telegram message with message id {tmsg.messageid} and channel id {tmsg.channelid}, webhook will be skipped.")
+                continue # this has been processed before, skip to next webhook
+
             fwname = ''
             webhookmsg = ''
 
             # chat icon handling
-            ifp = f"{message.chat.id}.jpg"  # Channel icons can be assumed to be JPEGs for the foreseeable future.
-            if message.chat.photo and not os.path.exists(config['telegram']['files_dir'] + ifp):
-                await tgclient.download_media(message.chat.photo.small_file_id, file_name=config['telegram']['files_dir'] + ifp)
+            ifp = f"{event.chat_id}.jpg"  # Channel icons can be assumed to be JPEGs for the foreseeable future.
+            if not os.path.exists(ifp) and not isinstance(chat.photo, telethon.types.ChatPhotoEmpty):
+                await tgclient.download_profile_photo(await event.get_chat(), file=config['telegram']['files_dir'] + ifp)
 
             # forward handling
             try:
-                if message.forward_from: # forwarded from user
-                    if message.forward_from.first_name and message.forward_from.last_name:
-                        fwname = f'Forwarded from {message.forward_from.first_name} {message.forward_from.last_name or ""}'
-                    else:
-                        fwname = "Forwarded from "+str(message.forward_from.first_name)
-                        fwname += " "+str(message.forward_from.last_name) if message.forward_from.last_name else "" # formatted last name
+                if event.message.forward and event.message.forward.from_id:
+                    ent = await tgclient.get_entity(event.message.forward.from_id)
 
-                elif message.forward_from_chat: # forwarded from chat
-                    if message.forward_from_chat.title:
-                        fwname = f"Forwarded from {message.forward_from_chat.title}"
-                    elif message.forward_from.first_name and message.forward_from.last_name:
-                        fwname = f'Forwarded from {message.forward_from_chat.first_name} {message.forward_from_chat.last_name or ""}'
+                    if ent.title:
+                        fwname = f'Forwarded from {ent.title}'
+                    elif ent.first_name and ent.last_name:
+                        fwname = f'Forwarded from {ent.first_name} {ent.last_name or ""} @{ent.username}'
                     else:
-                        # WARN: may or may not work for chats
-                        fwname = "Forwarded from "+str(message.forward_from.first_name)
-                        fwname += " "+str(message.forward_from_chat.last_name) if message.forward_from_chat.last_name else "" # formatted last name
-
-                elif message.forward_sender_name:  # forwarded from hidden account's comment
-                    fwname = f'Forwarded from {message.forward_sender_name} (Hidden Account)'
+                        fwname = "Forwarded from "+str(ent.first_name)
+                        fwname += " "+str(ent.last_name) if ent.last_name else "" # formatted last name
+                elif event.message.forward and not event.message.forward.from_id:
+                    fwname = f'{event.message.forward.from_name} (Hidden Account)'
             except:
-                raise
                 fwname = "**An exception has occurred fetching the origin channel.**"
 
-            if fwname != None:
-                webhookmsg += f"{fwname}\n\n"
-            if message.text != None:
-                webhookmsg += f"{message.text}"
-            elif message.caption != None:
-                webhookmsg += f"{message.caption}"
+            if fwname and event.message.message:  # forward AND message
+                webhookmsg += f"{fwname}\n\n{event.message.message}"
+            elif fwname:  # only forward
+                webhookmsg += f"{fwname}"
+            elif event.message.message:  # only message
+                webhookmsg += f"{event.message.message}"
 
             # file download handling
-            # message.media tells us the type of media to get attributes of
-            # photos do not have a mime-type
-            if message.media and message.media not in ["web_page"]:
-                # Photos dont have mime_type, but are always JPEGs.
-                if message.media == "photo":
-                    filename = f"{message.chat.id}-{message.message_id}.jpg"
+            if event.message.file and not event.message.web_preview:
+                if event.message.file.ext == ".jpe":
+                    mfpext = ".jpg"
                 else:
-                    filename = f"{message.chat.id}-{message.message_id}{os.path.splitext(message[message.media].file_name)[1]}"
+                    mfpext = event.message.file.ext
+
+                filename = f"{event.chat_id}-{event.message.id}{mfpext}"
                 # equates to something like files/-1001427017788-357.mp4
-                await message.download(file_name=config['telegram']['files_dir']+filename)
+                with open(config['telegram']['files_dir']+filename, 'wb') as f:
+                    async for chunk in tgclient.iter_download(event.message.file.media):
+                        f.write(chunk)
+
 
                 webhookmsg += f'\n\n{config["telegram"]["base_url"]}{filename}'
 
-
             # final webhook request handling
-            username = message.chat.title if message.chat.title else f'{message.chat.first_name} {message.chat.last_name}'
-            webhook = Webhook.from_url(webhook, adapter=AsyncWebhookAdapter(session))
-            await webhook.send(webhookmsg, username=message.chat.title, avatar_url=config['telegram']['base_url']+ifp)
+            username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
+            webhook = Webhook.from_url(webhook.url, adapter=AsyncWebhookAdapter(session))
+            if not isinstance(chat, telethon.types.User):
+                dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+            elif (await tgclient.get_me()).id == event.chat_id:
+                dmessage = await webhook.send(webhookmsg, username=f'Saved Messages', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+            elif isinstance(chat, telethon.types.User):
+                dmessage = await webhook.send(webhookmsg, username=f'DM with {chat.first_name} {chat.last_name}', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+            else:
+                raise Exception("Invalid event type for webhook formatting")
+
+            # log that the telegram message has been sent to this webhook
+            dmsg = DiscordMessage(id=dmessage.id, tgmessage=tmsg, webhookid=webhook.id)
+            sqlsession.add(dmsg)
+            sqlsession.commit()
 
 
 async def main():
     session = sqlsessionmaker()
 
-    await tgclient.start()  # start Pyrogram client
+    logger.info("Starting Telethon client..")
+    await tgclient.start()  # start Telethon client
+    logger.info("Telethon client started, checking chats list..")
 
     # TODO: change names of channels if they dont match since previous start
     # TODO: listen for channel leaves/joins/renames and react accordingly
     async for dialog in tgclient.iter_dialogs():
         chname = ''
-        if dialog.chat.title:
-            chname = dialog.chat.title
-        elif dialog.chat.first_name and dialog.chat.last_name:
-            chname = f'{dialog.chat.first_name} {dialog.chat.last_name or ""}'
+        if dialog.title:
+            chname = dialog.title
+        elif dialog.first_name and dialog.last_name:
+            chname = f'{dialog.first_name} {dialog.last_name or ""}'
         else:
             # first name and/or last name is not available
-            chname = dialog.chat.first_name
-            chname += " "+str(dialog.chat.last_name) if dialog.chat.last_name else "" # formatted last name
+            chname = dialog.first_name
+            chname += " "+str(dialog.last_name) if dialog.last_name else "" # formatted last name
 
-        if session.query(TelegramChannel).filter(TelegramChannel.id == dialog.chat.id).count() == 0:
-            if int(dialog.chat.id) == 777000:  # do not add the Telegram system channel to the database at all
+        logger.debug(f'Found chat {chname} ({dialog.id})')
+        if session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).count() == 0:
+            if int(dialog.id) == 777000:  # do not add the Telegram system channel to the database at all
                 continue
 
-            channel = TelegramChannel(id=dialog.chat.id, name=chname, registered=False)
+            channel = TelegramChannel(id=dialog.id, name=chname, registered=False)
             session.add(channel)
             session.commit()
-            print(f'{channel.name} ({channel.id} was added to the database.')
+            logger.info(f'{channel.name} ({channel.id} was added to the database.')
         else:
-            channel = session.query(TelegramChannel).filter(TelegramChannel.id == dialog.chat.id).one()
+            channel = session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).one()
             if channel.name != chname:
                 channel.name = chname
-                print(f'Channel {chname} was renamed in Telegram, renaming to {channel.name} in database.')
+                logger.info(f'Channel {chname} was renamed in Telegram, renaming to {channel.name} in database.')
                 session.add(channel)
                 session.commit()
     else:
         session.close()
 
-    await pyrogram.idle() # idle until told to stop
-    print("stopping")
+    logger.info('Startup tasks were completed, listening for new events..')
+    await tgclient.run_until_disconnected() # idle until told to stop
+    logger.info("Signal received, exiting gracefully..")
 
-    # we have received a signal to stop
+    #we have received a signal to stop
     await tgclient.stop()
     
 
-# dbot = loop.create_task(dclient.start("***REMOVED***", bot=True))
-tgbot = loop.create_task(main())
-# cli = loop.create_task(climain())
-gathered = asyncio.gather(tgbot)
-
-loop.run_until_complete(gathered)
+asyncio.run(main())

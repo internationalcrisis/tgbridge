@@ -112,3 +112,20 @@ class TelegramChannel(db):
     @webhookcount.expression
     def webhookcount(self):
         return select([func.count(TelegramChannel.id)]).where(TelegramChannel.id == self.id).join(TelegramChannel, Webhook.watched)
+
+class TelegramMessage(db):
+    """A Telegram message."""
+    __tablename__ = "tgmessage"
+    id = Column(String(128), primary_key=True, server_default=text("gen_random_uuid()"))
+    messageid = Column(BigInteger) # telegram message id
+    channelid = Column(BigInteger) # telegram channel id
+
+    dmessages = relationship("DiscordMessage", back_populates="tgmessage")
+
+class DiscordMessage(db):
+    __tablename__ = "dmessage"
+    id = Column(BigInteger, unique=True, primary_key=True) # discord message id
+    tgmessageid = Column(String(128), ForeignKey("tgmessage.id"))
+    webhookid = Column(String(128))
+    
+    tgmessage = relationship("TelegramMessage", back_populates="dmessages")

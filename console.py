@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from inspect import cleandoc
 import yaml
 import aiohttp
+import asyncio
+import telethon
 
 config = yaml.safe_load(open('config.yml', mode="r"))
 
@@ -411,3 +413,5 @@ async def climain():
     except Exception:
         console.print_exception()
         await climain()
+
+asyncio.run(climain())

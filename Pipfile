@@ -9,15 +9,14 @@ flask = "*"
 flask-admin = "*"
 pyyaml = "*"
 telethon = "*"
-"discord.py" = "*"
 aiohttp = "*"
 rich = "*"
 prompt-toolkit = "*"
-psycopg2 = "*"
-pyrogram = "*"
 sync = "*"
 py-cord = "*"
 tgcrypto = "*"
+sentry-sdk = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 
