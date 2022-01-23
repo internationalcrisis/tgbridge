@@ -95,7 +95,7 @@ async def on_message(event):
             # forward handling
             try:
                 if event.message.forward and event.message.forward.from_id:
-                    ent = await tgclient.get_entity(event.message.forward.from_id)
+                    ent = await event.message.forward.get_chat()
 
                     if ent.title:
                         fwname = f'Forwarded from {ent.title}'
@@ -106,8 +106,10 @@ async def on_message(event):
                         fwname += " "+str(ent.last_name) if ent.last_name else "" # formatted last name
                 elif event.message.forward and not event.message.forward.from_id:
                     fwname = f'{event.message.forward.from_name} (Hidden Account)'
-            except:
+            except Exception as err:
                 fwname = "**An exception has occurred fetching the origin channel.**"
+                # send the exception to sentry instead of silently catching it
+                sentry_sdk.capture_exception(err)
 
             if fwname and event.message.message:  # forward AND message
                 webhookmsg += f"{fwname}\n\n{event.message.message}"
