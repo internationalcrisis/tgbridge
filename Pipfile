@@ -17,6 +17,7 @@ py-cord = "*"
 tgcrypto = "*"
 sentry-sdk = "*"
 psycopg2-binary = "*"
+b2sdk = "*"
 
 [dev-packages]
 

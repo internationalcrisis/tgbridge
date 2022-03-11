@@ -11,6 +11,19 @@ import logging
 import sqlalchemy.exc
 from rich.logging import RichHandler
 import mimetypes
+import shutil
+import b2sdk
+from b2sdk.v2 import InMemoryAccountInfo, B2Api
+
+import sentry_sdk
+sentry_sdk.init(
+    "***REMOVED***",
+
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    # We recommend adjusting this value in production.
+    traces_sample_rate=1.0
+)
 
 # noinspection PyArgumentList
 logging.basicConfig(format='%(message)s', datefmt="[%X]", level=logging.WARNING, handlers=[RichHandler()])
@@ -27,6 +40,67 @@ from models import db, Webhook as DBWebhook, TelegramChannel, Watchgroup, Telegr
 db.metadata.create_all(sqlengine)
 
 tgclient = telethon.TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
+
+def slash_join(*args):
+    '''
+    Joins a set of strings with a slash (/) between them. Useful for creating URLs.
+    If the strings already have a trailing or leading slash, it is ignored.
+    Note that the python's urllib.parse.urljoin() does not offer this functionality. 
+
+    https://codereview.stackexchange.com/questions/175421/joining-strings-to-form-a-url
+    '''
+    return "/".join(arg.strip("/") for arg in args)
+
+# TODO: a flag to allow/deny large files beyond a certain size?
+# TODO: potential DoS by uploading multiple very large files and exhausting RAM of host system and tmpfs.
+# FIXME: replace dictionary subscripting with .get and/or validation so its actually reliable
+# tmpfs may write to disk as a backup anyway but still concerning.
+async def download_media(event):
+    if event.message.file and not event.message.web_preview:
+        # These are all JPEGs, renaming them makes it easier for everyone.
+        # .jpe is the only one seen on Telegram due to a Telegram quirk though.
+        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]: 
+            mfpext = ".jpg"
+        else:
+            mfpext = event.message.file.ext
+
+        filename = f"{event.chat_id}-{event.message.id}{mfpext}"
+        # download the file to cached directory so we can pass it to other handlers
+        with open(config['storage']['cache_dir']+filename, 'wb') as f:
+            async for chunk in tgclient.iter_download(event.message.file.media):
+                f.write(chunk)
+
+        if config['storage']['local']['enabled']:
+            shutil.copyfile(config['storage']['cache_dir']+filename, slash_join(config['storage']['local']['file_prefix'], filename))
+            os.remove(config['storage']['cache_dir']+filename)
+
+            # {url_prefix}/{filename}
+            url = slash_join(config['storage']['local']['url_prefix'], filename)
+            logger.debug(f'URL created using local storage: {url}')
+            return url
+
+        elif config['storage']['b2']['enabled']:
+            info = InMemoryAccountInfo()
+            b2_api = B2Api(info)
+            b2_api.authorize_account("production", config['storage']['b2']['api_id'], config['storage']['b2']['api_key'])
+
+            if config['storage']['b2']['bucket_name']:
+                bucket = b2_api.get_bucket_by_name(config['storage']['b2']['bucket_name'])
+            elif config['storage']['b2']['bucket_id']:
+                bucket = b2_api.get_bucket_by_id(config['storage']['b2']['bucket_id'])
+            else:
+                raise Exception("no bucket name or id given")
+
+            bucket.upload_local_file(
+                local_file=slash_join(config['storage']['cache_dir']+filename),
+                file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
+            )
+            # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
+            url = slash_join(config['storage']['b2']['url_prefix'], "/file/"+bucket.name, config['storage']['b2']['file_prefix'], filename)
+
+            logger.debug(f'URL created using B2 Backblaze storage: {url}')
+            return f"{url}"
+
 
 def is_watched(message):
     session = sqlsessionmaker()
@@ -125,14 +199,9 @@ async def on_message(event):
                 else:
                     mfpext = event.message.file.ext
 
-                filename = f"{event.chat_id}-{event.message.id}{mfpext}"
-                # equates to something like files/-1001427017788-357.mp4
-                with open(config['telegram']['files_dir']+filename, 'wb') as f:
-                    async for chunk in tgclient.iter_download(event.message.file.media):
-                        f.write(chunk)
+                url = await download_media(event)
 
-
-                webhookmsg += f'\n\n{config["telegram"]["base_url"]}{filename}'
+                webhookmsg += f'\n\n{url}'
 
             # final webhook request handling
             username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
