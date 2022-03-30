@@ -14,16 +14,6 @@ import mimetypes
 import shutil
 import b2sdk
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
-
-import sentry_sdk
-sentry_sdk.init(
-    "***REMOVED***",
-
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for performance monitoring.
-    # We recommend adjusting this value in production.
-    traces_sample_rate=1.0
-)
 import telethon.events as tgevents
 
 # noinspection PyArgumentList
@@ -182,8 +172,6 @@ async def on_message(event):
                     fwname = f'{event.message.forward.from_name} (Hidden Account)'
             except Exception as err:
                 fwname = "**An exception has occurred fetching the origin channel.**"
-                # send the exception to sentry instead of silently catching it
-                sentry_sdk.capture_exception(err)
 
             if fwname and event.message.message:  # forward AND message
                 webhookmsg += f"{fwname}\n\n{event.message.message}"
