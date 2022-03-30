@@ -24,6 +24,7 @@ sentry_sdk.init(
     # We recommend adjusting this value in production.
     traces_sample_rate=1.0
 )
+import telethon.events as tgevents
 
 # noinspection PyArgumentList
 logging.basicConfig(format='%(message)s', datefmt="[%X]", level=logging.WARNING, handlers=[RichHandler()])
@@ -38,8 +39,6 @@ sqlsessionmaker = sessionmaker(bind=sqlengine)
 from models import db, Webhook as DBWebhook, TelegramChannel, Watchgroup, TelegramMessage, DiscordMessage
 # db.metadata.drop_all(sqlengine)
 db.metadata.create_all(sqlengine)
-
-tgclient = telethon.TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash'])
 
 def slash_join(*args):
     '''
@@ -132,15 +131,16 @@ def is_watched(message):
     # logger.warning("Pyrogram client was disconnected.")
 
 # TODO: better path handling with pathlib
-@tgclient.on(events.NewMessage())
+@tgevents.register(events.NewMessage())
 async def on_message(event):
     sqlsession = sqlsessionmaker()
     chat = await event.get_chat()
+    tgclient = event.client
 
     if event.chat_id == 777000 or event.sender_id == 777000:
         return # don't send anything from official telegram system channel either
 
-    # if no TelegramMessage wxith this message id and channel id exists, create one.
+    # if no TelegramMessage with this message id and channel id exists, create one.
     tmsg = sqlsession.query(TelegramMessage).filter(TelegramMessage.messageid == event.message.id, TelegramMessage.channelid == event.chat_id).one_or_none()
     if tmsg is None:
         tmsg = TelegramMessage(messageid=event.message.id, channelid=event.chat_id)
@@ -222,50 +222,57 @@ async def on_message(event):
 
 
 async def main():
-    session = sqlsessionmaker()
+    # dev rant:
+    # so if we use .start(), it'll deadlock during login and won't properly start event handlers
+    # but if we use async with (which runs .start or equivalent) it does work
+    # what the hell
+    async with telethon.TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash']) as tgclient:
+        session = sqlsessionmaker()
 
-    logger.info("Starting Telethon client..")
-    await tgclient.start()  # start Telethon client
-    logger.info("Telethon client started, checking chats list..")
+        tgclient.add_event_handler(on_message)
 
-    # TODO: change names of channels if they dont match since previous start
-    # TODO: listen for channel leaves/joins/renames and react accordingly
-    async for dialog in tgclient.iter_dialogs():
-        chname = ''
-        if dialog.title:
-            chname = dialog.title
-        elif dialog.first_name and dialog.last_name:
-            chname = f'{dialog.first_name} {dialog.last_name or ""}'
-        else:
-            # first name and/or last name is not available
-            chname = dialog.first_name
-            chname += " "+str(dialog.last_name) if dialog.last_name else "" # formatted last name
+        logger.info("Starting Telethon client..")
+        # await tgclient.start()  # start Telethon client
+        logger.info("Telethon client started, checking chats list..")
 
-        logger.debug(f'Found chat {chname} ({dialog.id})')
-        if session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).count() == 0:
-            if int(dialog.id) == 777000:  # do not add the Telegram system channel to the database at all
-                continue
+        # TODO: change names of channels if they dont match since previous start
+        # TODO: listen for channel leaves/joins/renames and react accordingly
+        async for dialog in tgclient.iter_dialogs():
+            chname = ''
+            if dialog.title:
+                chname = dialog.title
+            elif dialog.first_name and dialog.last_name:
+                chname = f'{dialog.first_name} {dialog.last_name or ""}'
+            else:
+                # first name and/or last name is not available
+                chname = dialog.first_name
+                chname += " "+str(dialog.last_name) if dialog.last_name else "" # formatted last name
 
-            channel = TelegramChannel(id=dialog.id, name=chname, registered=False)
-            session.add(channel)
-            session.commit()
-            logger.info(f'{channel.name} ({channel.id} was added to the database.')
-        else:
-            channel = session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).one()
-            if channel.name != chname:
-                channel.name = chname
-                logger.info(f'Channel {chname} was renamed in Telegram, renaming to {channel.name} in database.')
+            logger.debug(f'Found chat {chname} ({dialog.id})')
+            if session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).count() == 0:
+                if int(dialog.id) == 777000:  # do not add the Telegram system channel to the database at all
+                    continue
+
+                channel = TelegramChannel(id=dialog.id, name=chname, registered=False)
                 session.add(channel)
                 session.commit()
-    else:
-        session.close()
+                logger.info(f'{channel.name} ({channel.id} was added to the database.')
+            else:
+                channel = session.query(TelegramChannel).filter(TelegramChannel.id == dialog.id).one()
+                if channel.name != chname:
+                    channel.name = chname
+                    logger.info(f'Channel {chname} was renamed in Telegram, renaming to {channel.name} in database.')
+                    session.add(channel)
+                    session.commit()
+        else:
+            session.close()
 
-    logger.info('Startup tasks were completed, listening for new events..')
-    await tgclient.run_until_disconnected() # idle until told to stop
-    logger.info("Signal received, exiting gracefully..")
+        logger.info('Startup tasks were completed, listening for new events..')
+        await tgclient.run_until_disconnected() # idle until told to stop
+        logger.info("Signal received, exiting gracefully..")
 
-    #we have received a signal to stop
-    await tgclient.stop()
-    
+        #we have received a signal to stop
+        await tgclient.stop()
+
 
 asyncio.run(main())
