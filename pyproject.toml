@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "tgbridge"
+version = "0.1.0"
+description = "Telegram Bridge"
+authors = ["internationalcrisis <crisis@ccrda.us>", "samicrusader <hi@samicrusader.me>", "Nuclear Winter <admin@ccrda.us>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+SQLAlchemy = "^1.4.32"
+PyYAML = "^6.0"
+Telethon = "^1.24.0"
+rich = "^12.0.1"
+prompt-toolkit = "^3.0.28"
+cryptg = "^0.2.post4"
+b2sdk = "^1.14.1"
+psycopg2 = "^2.9.3"
+py-cord = "^2.0.0b5"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
