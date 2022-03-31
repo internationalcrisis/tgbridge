@@ -41,43 +41,43 @@ def slash_join(*args):
     return "/".join(arg.strip("/") for arg in args)
 
 async def upload_media(filename):
-        """Upload file named `filename` which is in the configured cache directory to configured storage, then deleted the cached copy after upload."""
-        if config['storage']['local']['enabled']:
-            shutil.copyfile(config['storage']['cache_dir']+filename, slash_join(config['storage']['local']['file_prefix'], filename))
-            os.remove(config['storage']['cache_dir']+filename)
+    """Upload file named `filename` which is in the configured cache directory to configured storage, then deleted the cached copy after upload."""
+    if config['storage']['local']['enabled']:
+        shutil.copyfile(config['storage']['cache_dir']+filename, slash_join(config['storage']['local']['file_prefix'], filename))
+        os.remove(config['storage']['cache_dir']+filename)
 
-            # {url_prefix}/{filename}
-            url = slash_join(config['storage']['local']['url_prefix'], filename)
-            logger.debug(f'URL created using local storage: {url}')
-            return url
+        # {url_prefix}/{filename}
+        url = slash_join(config['storage']['local']['url_prefix'], filename)
+        logger.debug(f'URL created using local storage: {url}')
+        return url
 
-        elif config['storage']['b2']['enabled']:
-            info = InMemoryAccountInfo()  # TODO: put this somewhere else
-            b2_api = B2Api(info)
-            b2_api.authorize_account("production", config['storage']['b2']['api_id'], config['storage']['b2']['api_key'])
+    elif config['storage']['b2']['enabled']:
+        info = InMemoryAccountInfo()  # TODO: put this somewhere else
+        b2_api = B2Api(info)
+        b2_api.authorize_account("production", config['storage']['b2']['api_id'], config['storage']['b2']['api_key'])
 
-            if config['storage']['b2']['bucket_name']:
-                bucket = b2_api.get_bucket_by_name(config['storage']['b2']['bucket_name'])
-            elif config['storage']['b2']['bucket_id']:
-                bucket = b2_api.get_bucket_by_id(config['storage']['b2']['bucket_id'])
-            else:
-                raise Exception("no bucket name or id given")
+        if config['storage']['b2']['bucket_name']:
+            bucket = b2_api.get_bucket_by_name(config['storage']['b2']['bucket_name'])
+        elif config['storage']['b2']['bucket_id']:
+            bucket = b2_api.get_bucket_by_id(config['storage']['b2']['bucket_id'])
+        else:
+            raise Exception("no bucket name or id given")
 
-            try:
-                bucket.get_file_info_by_name(slash_join(config['storage']['b2']['file_prefix'], filename))
-            except b2sdk.exception.FileNotPresent:
-                bucket.upload_local_file(
-                    local_file=os.path.join(config['storage']['cache_dir'], filename),
-                    file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
-                )
-            else:
-                logger.debug(f"File \"{os.path.join(config['storage']['b2']['file_prefix'], filename)}\" already exists on B2 Backblaze.")
+        try:
+            bucket.get_file_info_by_name(slash_join(config['storage']['b2']['file_prefix'], filename))
+        except b2sdk.exception.FileNotPresent:
+            bucket.upload_local_file(
+                local_file=os.path.join(config['storage']['cache_dir'], filename),
+                file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
+            )
+        else:
+            logger.debug(f"File \"{os.path.join(config['storage']['b2']['file_prefix'], filename)}\" already exists on B2 Backblaze.")
 
-            # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
-            url = slash_join(config['storage']['b2']['url_prefix'], "/file/"+bucket.name, config['storage']['b2']['file_prefix'], filename)
+        # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
+        url = slash_join(config['storage']['b2']['url_prefix'], "/file/"+bucket.name, config['storage']['b2']['file_prefix'], filename)
 
-            logger.debug(f'URL created using B2 Backblaze storage: {url}')
-            return url
+        logger.debug(f'URL created using B2 Backblaze storage: {url}')
+        return url
 
 # TODO: a flag to allow/deny large files beyond a certain size?
 # FIXME: replace dictionary subscripting with .get and/or validation so its actually reliable
