@@ -1,7 +1,7 @@
 import asyncio
 from telethon import TelegramClient, events
 import telethon
-from discord import Webhook, AsyncWebhookAdapter
+from discord import Webhook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import yaml
@@ -40,25 +40,8 @@ def slash_join(*args):
     '''
     return "/".join(arg.strip("/") for arg in args)
 
-# TODO: a flag to allow/deny large files beyond a certain size?
-# TODO: potential DoS by uploading multiple very large files and exhausting RAM of host system and tmpfs.
-# FIXME: replace dictionary subscripting with .get and/or validation so its actually reliable
-# tmpfs may write to disk as a backup anyway but still concerning.
-async def download_media(event):
-    if event.message.file and not event.message.web_preview:
-        # These are all JPEGs, renaming them makes it easier for everyone.
-        # .jpe is the only one seen on Telegram due to a Telegram quirk though.
-        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]: 
-            mfpext = ".jpg"
-        else:
-            mfpext = event.message.file.ext
-
-        filename = f"{event.chat_id}-{event.message.id}{mfpext}"
-        # download the file to cached directory so we can pass it to other handlers
-        with open(config['storage']['cache_dir']+filename, 'wb') as f:
-            async for chunk in tgclient.iter_download(event.message.file.media):
-                f.write(chunk)
-
+async def upload_media(filename):
+        """Upload file named `filename` which is in the configured cache directory to configured storage, then deleted the cached copy after upload."""
         if config['storage']['local']['enabled']:
             shutil.copyfile(config['storage']['cache_dir']+filename, slash_join(config['storage']['local']['file_prefix'], filename))
             os.remove(config['storage']['cache_dir']+filename)
@@ -69,7 +52,7 @@ async def download_media(event):
             return url
 
         elif config['storage']['b2']['enabled']:
-            info = InMemoryAccountInfo()
+            info = InMemoryAccountInfo()  # TODO: put this somewhere else
             b2_api = B2Api(info)
             b2_api.authorize_account("production", config['storage']['b2']['api_id'], config['storage']['b2']['api_key'])
 
@@ -80,15 +63,54 @@ async def download_media(event):
             else:
                 raise Exception("no bucket name or id given")
 
-            bucket.upload_local_file(
-                local_file=slash_join(config['storage']['cache_dir']+filename),
-                file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
-            )
+            try:
+                bucket.get_file_info_by_name(slash_join(config['storage']['b2']['file_prefix'], filename))
+            except b2sdk.exception.FileNotPresent:
+                bucket.upload_local_file(
+                    local_file=os.path.join(config['storage']['cache_dir'], filename),
+                    file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
+                )
+            else:
+                logger.debug(f"File \"{os.path.join(config['storage']['b2']['file_prefix'], filename)}\" already exists on B2 Backblaze.")
+
             # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
             url = slash_join(config['storage']['b2']['url_prefix'], "/file/"+bucket.name, config['storage']['b2']['file_prefix'], filename)
 
             logger.debug(f'URL created using B2 Backblaze storage: {url}')
-            return f"{url}"
+            return url
+
+# TODO: a flag to allow/deny large files beyond a certain size?
+# FIXME: replace dictionary subscripting with .get and/or validation so its actually reliable
+async def download_media(event):
+    tgclient = event.client
+    if event.message.file and not event.message.web_preview:
+        # These are all JPEGs, renaming them makes it easier for everyone.
+        # .jpe is the only one seen on Telegram due to a Telegram quirk though.
+        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]: 
+            mfpext = ".jpg"
+        else:
+            mfpext = event.message.file.ext
+
+        filename = f"{event.chat_id}-{event.message.id}{mfpext}"
+        # download the file to cached directory so we can pass it to other handlers
+        with open(os.path.join(config['storage']['cache_dir'], filename), 'wb') as f:
+            async for chunk in tgclient.iter_download(event.message.file.media):
+                f.write(chunk)
+
+        return await upload_media(filename)
+
+# TODO: hash db to see if we've downloaded a profile photo before
+async def download_profile_photo(event):
+    """Download a Chat's profile photo from an event (preferably NewMessage) and upload it for use from the configured storage system."""
+    chat = await event.get_chat()
+    tgclient = event.client
+
+    filename = f"{event.chat_id}.jpg"  # Channel icons can be assumed to be JPEGs for the foreseeable future.
+    if not os.path.exists(filename) and not isinstance(chat.photo, telethon.types.ChatPhotoEmpty):
+        await tgclient.download_profile_photo(await event.get_chat(), file=os.path.join(config['storage']['cache_dir'], filename))
+        return await upload_media(filename)
+    else:
+        return None
 
 
 def is_watched(message):
@@ -151,10 +173,7 @@ async def on_message(event):
             fwname = ''
             webhookmsg = ''
 
-            # chat icon handling
-            ifp = f"{event.chat_id}.jpg"  # Channel icons can be assumed to be JPEGs for the foreseeable future.
-            if not os.path.exists(ifp) and not isinstance(chat.photo, telethon.types.ChatPhotoEmpty):
-                await tgclient.download_profile_photo(await event.get_chat(), file=config['telegram']['files_dir'] + ifp)
+            ifp = await download_profile_photo(event)
 
             # forward handling
             try:
@@ -162,9 +181,12 @@ async def on_message(event):
                     ent = await event.message.forward.get_chat()
 
                     if ent.title:
-                        fwname = f'Forwarded from {ent.title}'
+                        if ent.username:
+                            fwname = f'Forwarded from [{ent.title}](https://t.me/{ent.username} "Join this channel on Telegram")'
+                        else:
+                            fwname = f'Forwarded from {ent.title} (Hidden Channel)'
                     elif ent.first_name and ent.last_name:
-                        fwname = f'Forwarded from {ent.first_name} {ent.last_name or ""} @{ent.username}'
+                        fwname = f'Forwarded from {ent.first_name} {ent.last_name} @{ent.username}'
                     else:
                         fwname = "Forwarded from "+str(ent.first_name)
                         fwname += " "+str(ent.last_name) if ent.last_name else "" # formatted last name
@@ -193,15 +215,15 @@ async def on_message(event):
 
             # final webhook request handling
             username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
-            webhook = Webhook.from_url(webhook.url, adapter=AsyncWebhookAdapter(session))
+            webhook = Webhook.from_url(webhook.url, session=session)
             if not isinstance(chat, telethon.types.User):
-                dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+                dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=ifp, wait=True)
             elif (await tgclient.get_me()).id == event.chat_id:
-                dmessage = await webhook.send(webhookmsg, username=f'Saved Messages', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+                dmessage = await webhook.send(webhookmsg, username=f'Saved Messages', avatar_url=ifp, wait=True)
             elif isinstance(chat, telethon.types.User):
-                dmessage = await webhook.send(webhookmsg, username=f'DM with {chat.first_name} {chat.last_name}', avatar_url=config['telegram']['base_url']+ifp, wait=True)
+                dmessage = await webhook.send(webhookmsg, username=f'{chat.first_name} {chat.last_name} @{ent.username}', avatar_url=ifp, wait=True)
             else:
-                raise Exception("Invalid event type for webhook formatting")
+                dmessage = await webhook.send(webhookmsg, username=f'Invalid event type', avatar_url=ifp, wait=True)
 
             # log that the telegram message has been sent to this webhook
             dmsg = DiscordMessage(id=dmessage.id, tgmessage=tmsg, webhookid=webhook.id)
