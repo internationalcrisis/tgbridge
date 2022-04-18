@@ -82,6 +82,8 @@ async def upload_media(filename):
         else:
             logger.debug(f"File \"{os.path.join(settings.storage.b2.file_prefix, filename)}\" already exists on B2 Backblaze.")
 
+        os.remove(os.path.join(settings.storage.cache_dir, filename))
+
         # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
         url = slash_join(settings.storage.b2.url_prefix, "/file/"+bucket.name, settings.storage.b2.file_prefix, filename)
 
