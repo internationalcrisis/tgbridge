@@ -1,5 +1,4 @@
 import asyncio
-from telethon import TelegramClient, events
 import telethon
 from discord import Webhook
 from sqlalchemy import create_engine
@@ -148,12 +147,7 @@ def is_watched(message):
     session.close()
     return outhooks
 
-# @tgclient.on_disconnect()
-# async def on_disconnect(client):
-    # logger.warning("Pyrogram client was disconnected.")
-
-# TODO: better path handling with pathlib
-@tgevents.register(events.NewMessage())
+@tgevents.register(tgevents.NewMessage())
 async def on_message(event):
     sqlsession = sqlsessionmaker()
     chat = await event.get_chat()
@@ -252,8 +246,6 @@ async def main():
 
         tgclient.add_event_handler(on_message)
 
-        logger.info("Starting Telethon client..")
-        # await tgclient.start()  # start Telethon client
         logger.info("Telethon client started, checking chats list..")
 
         # TODO: change names of channels if they dont match since previous start
@@ -296,4 +288,8 @@ async def main():
         await tgclient.stop()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        raise
