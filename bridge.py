@@ -7,6 +7,7 @@ import yaml
 import aiohttp
 import os
 import logging
+import re
 import sqlalchemy.exc
 from rich.logging import RichHandler
 import shutil
@@ -208,6 +209,56 @@ async def on_message(event):
                 webhookmsg += f"{fwname}"
             elif event.message.message:  # only message
                 webhookmsg += f"{event.message.message}"
+
+            # Message entity markdown handling
+            # Markdown hyperlink syntax is NOT supported on Telegram, but is supported on Discord (for bots and webhooks only).
+            # This escapes them so they aren't parsed as Markdown hyperlinks.
+            webhookmsg = re.sub(r'\[(.*?)\]\((.*?)\)', r'\(\1\)\[\2\]', webhookmsg)
+
+            if event.message.entities:
+                for entity in event.message.entities:
+                    start = entity.offset
+                    end = start + entity.length
+                    
+                    # "https://example.com" creates these. Telegram will automatically add "https://" to URLs without a scheme.
+                    if isinstance(entity, telethon.types.MessageEntityUrl):
+                        if "://" not in webhookmsg:  # Don't add https:// if it's already there
+                            webhookmsg = webhookmsg.replace(event.message.message[start:end], "https://"+event.message.message[start:end])
+
+                    # Special hyperlinks, Ctrl-K creates these on Telegram desktop.
+                    elif isinstance(entity, telethon.types.MessageEntityTextUrl):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}]({entity.url})")
+                    
+                    # "@username" creates these.
+                    elif isinstance(entity, telethon.types.MessageEntityMention):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](https://t.me/{event.message.message[start+1:end]})")
+                    
+                    # Don't know what creates these, mentioning user who doesn't have username?
+                    elif isinstance(entity, telethon.types.MessageEntityMentionName):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](https://t.me/{entity.user_id})")
+                    
+                    # "``` ```" creates these. Standard Markdown code block.
+                    elif isinstance(entity, telethon.types.MessageEntityPre):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"```{entity.language}\n{event.message.message[start:end]}```")
+
+                    # These exist for making sure that the Telegram markdown syntax is translated to Discord's syntax,
+                    # and are self-explanatory as a result.
+                    elif isinstance(entity, telethon.types.MessageEntityBold):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"**{event.message.message[start:end]}**")
+                    elif isinstance(entity, telethon.types.MessageEntityItalic):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"*{event.message.message[start:end]}*")
+                    elif isinstance(entity, telethon.types.MessageEntityCode):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"`{event.message.message[start:end]}`")
+                    elif isinstance(entity, telethon.types.MessageEntityStrike):
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"~~{event.message.message[start:end]}~~")
+                    elif isinstance(entity, telethon.types.MessageEntityUnderline):  # parsed as --text-- on telegram
+                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"__{event.message.message[start:end]}__")
+
+                    # # username@domain.tld syntax creates these, but they are not supported on Discord.
+                    # elif isinstance(entity, telethon.types.MessageEntityEmail):
+                    #     webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](mailto:{event.message.message[start:end]})")
+                    else:
+                        logger.warn(f'Invalid MessageEntity type {type(entity)}: {event.message.message[start:end]}')
 
             # file download handling
             if event.message.file and not event.message.web_preview:
