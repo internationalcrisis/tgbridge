@@ -21,14 +21,24 @@ logging.basicConfig(format='%(message)s', datefmt="[%X]", level=logging.WARNING,
 logger = logging.getLogger('bridge')
 logger.setLevel(logging.DEBUG)
 
-config = yaml.safe_load(open('config.yml'))
+from config import Settings
 
-sqlengine = create_engine(config['dburl'])
+if os.environ.get("TGBRIDGE_ENVCONFIG"):
+    settings = Settings()  # Exclusively use environment variables for configuration.
+elif os.path.exists(os.environ.get('CONFIG', "config.yml")):
+    config = yaml.safe_load(open(os.environ.get('CONFIG', "config.yml")))
+    settings = Settings.parse_obj(config)
+else:
+    logger.warning(f"No config file was found at {os.environ.get('CONFIG', 'config.yml')}, failing over to environment variables.\nIf this was intentional, set TGBRIDGE_ENVCONFIG=true to hide this warning.")
+    settings = Settings()
+
+sqlengine = create_engine(settings.dburl)
 sqlsessionmaker = sessionmaker(bind=sqlengine)
 
 from models import db, Webhook as DBWebhook, TelegramChannel, Watchgroup, TelegramMessage, DiscordMessage
 # db.metadata.drop_all(sqlengine)
 db.metadata.create_all(sqlengine)
+
 
 def slash_join(*args):
     '''
@@ -41,40 +51,40 @@ def slash_join(*args):
     return "/".join(arg.strip("/") for arg in args)
 
 async def upload_media(filename):
-    """Upload file named `filename` which is in the configured cache directory to configured storage, then deleted the cached copy after upload."""
-    if config['storage']['local']['enabled']:
-        shutil.copyfile(config['storage']['cache_dir']+filename, slash_join(config['storage']['local']['file_prefix'], filename))
-        os.remove(config['storage']['cache_dir']+filename)
+    """Upload file named `filename` which is in the configured cache directory to configured storage, then delete the cached copy after upload."""
+    if settings.storage.local.enabled:
+        shutil.copyfile(settings.storage.cache_dir+filename, slash_join(settings.storage.local.file_prefix, filename))
+        os.remove(settings.storage.cache_dir+filename)
 
         # {url_prefix}/{filename}
-        url = slash_join(config['storage']['local']['url_prefix'], filename)
+        url = slash_join(settings.storage.local.url_prefix, filename)
         logger.debug(f'URL created using local storage: {url}')
         return url
 
-    elif config['storage']['b2']['enabled']:
+    elif settings.storage.b2.enabled:
         info = InMemoryAccountInfo()  # TODO: put this somewhere else
         b2_api = B2Api(info)
-        b2_api.authorize_account("production", config['storage']['b2']['api_id'], config['storage']['b2']['api_key'])
+        b2_api.authorize_account("production", settings.storage.b2.api_id, settings.storage.b2.api_key)
 
-        if config['storage']['b2']['bucket_name']:
-            bucket = b2_api.get_bucket_by_name(config['storage']['b2']['bucket_name'])
-        elif config['storage']['b2']['bucket_id']:
-            bucket = b2_api.get_bucket_by_id(config['storage']['b2']['bucket_id'])
+        if settings.storage.b2.bucket_name:
+            bucket = b2_api.get_bucket_by_name(settings.storage.b2.bucket_name)
+        elif settings.storage.b2.bucket_id:
+            bucket = b2_api.get_bucket_by_id(settings.storage.b2.bucket_id)
         else:
             raise Exception("no bucket name or id given")
 
         try:
-            bucket.get_file_info_by_name(slash_join(config['storage']['b2']['file_prefix'], filename))
+            bucket.get_file_info_by_name(slash_join(settings.storage.b2.file_prefix, filename))
         except b2sdk.exception.FileNotPresent:
             bucket.upload_local_file(
-                local_file=os.path.join(config['storage']['cache_dir'], filename),
-                file_name=slash_join(config['storage']['b2']['file_prefix'], filename)
+                local_file=os.path.join(settings.storage.cache_dir, filename),
+                file_name=slash_join(settings.storage.b2.file_prefix, filename)
             )
         else:
-            logger.debug(f"File \"{os.path.join(config['storage']['b2']['file_prefix'], filename)}\" already exists on B2 Backblaze.")
+            logger.debug(f"File \"{os.path.join(settings.storage.b2.file_prefix, filename)}\" already exists on B2 Backblaze.")
 
         # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
-        url = slash_join(config['storage']['b2']['url_prefix'], "/file/"+bucket.name, config['storage']['b2']['file_prefix'], filename)
+        url = slash_join(settings.storage.b2.url_prefix, "/file/"+bucket.name, settings.storage.b2.file_prefix, filename)
 
         logger.debug(f'URL created using B2 Backblaze storage: {url}')
         return url
@@ -93,7 +103,7 @@ async def download_media(event):
 
         filename = f"{event.chat_id}-{event.message.id}{mfpext}"
         # download the file to cached directory so we can pass it to other handlers
-        with open(os.path.join(config['storage']['cache_dir'], filename), 'wb') as f:
+        with open(os.path.join(settings.storage.cache_dir, filename), 'wb') as f:
             async for chunk in tgclient.iter_download(event.message.file.media):
                 f.write(chunk)
 
@@ -107,7 +117,7 @@ async def download_profile_photo(event):
 
     filename = f"{event.chat_id}.jpg"  # Channel icons can be assumed to be JPEGs for the foreseeable future.
     if not os.path.exists(filename) and not isinstance(chat.photo, telethon.types.ChatPhotoEmpty):
-        await tgclient.download_profile_photo(await event.get_chat(), file=os.path.join(config['storage']['cache_dir'], filename))
+        await tgclient.download_profile_photo(await event.get_chat(), file=os.path.join(settings.storage.cache_dir, filename))
         return await upload_media(filename)
     else:
         return None
@@ -236,7 +246,8 @@ async def main():
     # so if we use .start(), it'll deadlock during login and won't properly start event handlers
     # but if we use async with (which runs .start or equivalent) it does work
     # what the hell
-    async with telethon.TelegramClient(config['telegram']['sessionfile'], config['telegram']['api_id'], config['telegram']['api_hash']) as tgclient:
+    logger.info("Starting Telethon client..")
+    async with telethon.TelegramClient(settings.telegram.sessionfile, settings.telegram.api_id, settings.telegram.api_hash) as tgclient:
         session = sqlsessionmaker()
 
         tgclient.add_event_handler(on_message)
