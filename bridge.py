@@ -9,11 +9,12 @@ import os
 import logging
 import sqlalchemy.exc
 from rich.logging import RichHandler
-import mimetypes
 import shutil
 import b2sdk
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 import telethon.events as tgevents
+
+# pylint: disable=missing-class-docstring, missing-function-docstring, invalid-name
 
 # noinspection PyArgumentList
 logging.basicConfig(format='%(message)s', datefmt="[%X]", level=logging.WARNING, handlers=[RichHandler()])
