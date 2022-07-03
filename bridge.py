@@ -101,20 +101,19 @@ async def upload_media(filename):
 
 # TODO: a flag to allow/deny large files beyond a certain size?
 # FIXME: replace dictionary subscripting with .get and/or validation so its actually reliable
-async def download_media(event):
-    tgclient = event.client
-    if event.message.file and not event.message.web_preview:
+async def download_media_message(tgclient, message):
+    if message.file and not message.web_preview:
         # These are all JPEGs, renaming them makes it easier for everyone.
         # .jpe is the only one seen on Telegram due to a Telegram quirk though.
-        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]:
+        if message.file.ext in [".jpe", ".jpeg", ".jfif"]:
             mfpext = ".jpg"
         else:
-            mfpext = event.message.file.ext
+            mfpext = message.file.ext
 
-        filename = f"{event.chat_id}-{event.message.id}{mfpext}"
+        filename = f"{message.chat_id}-{message.id}{mfpext}"
         # download the file to cached directory so we can pass it to other handlers
         with open(os.path.join(settings.storage.cache_dir, filename), 'wb') as f:
-            async for chunk in tgclient.iter_download(event.message.file.media):
+            async for chunk in tgclient.iter_download(message.file.media):
                 f.write(chunk)
 
         return await upload_media(filename)
@@ -274,8 +273,8 @@ async def on_message(event):
                     mfpext = ".jpg"
                 else:
                     mfpext = event.message.file.ext
+            url = await download_media_message(tgclient, event.message)
 
-                url = await download_media(event)
 
                 webhookmsg += f'\n\n{url}'
 
