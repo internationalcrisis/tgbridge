@@ -12,6 +12,7 @@ import sqlalchemy.exc
 from rich.logging import RichHandler
 import shutil
 import b2sdk
+import sys
 from b2sdk.v2 import InMemoryAccountInfo, B2Api
 import telethon.events as tgevents
 
@@ -249,12 +250,69 @@ async def format_message(message):
                 logger.warn(f'Invalid MessageEntity type {type(entity)}: {entity_text}')
 
     return text
+
+@tgevents.register(tgevents.Album())
+async def on_album(event):
+    sqlsession = sqlsessionmaker()
+    chat = await event.get_chat()
+    tgclient = event.client
+
+    ifp = await download_profile_photo(event)
+
+    webhooks = [webhook for webhook in is_watched(event)] # get webhooks that are interested in this message
+
+    for webhook in webhooks:
+        async with aiohttp.ClientSession() as session:
+
+            # forward handling
+            try:
+                fwname = await format_forwarding(event)
+            except:
+                fwname = "**An exception has occurred fetching the origin channel.**"
+
+            # message formatting handling
+            # TODO: do better
+            for message in event:
+                if message.message:
+                    content = await format_message(message)
+
+            # file download handling
+            # TODO: if there are more than 5 links (album or not) then not all of them will show.
+            urls = []
+            for message in event:
+                if message.file and not message.web_preview:
+                    urls.append(await download_media_message(tgclient, message))
+
+            webhookmsg = content
+
+            if fwname:
+                webhookmsg = fwname + "\n\n" + webhookmsg
+
+            if urls:
+                webhookmsg = webhookmsg + '\n\n' + "\n".join(urls)
+
+            # final webhook request handling
+            username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
+            ent = await event.message.get_chat()
             webhook = Webhook.from_url(webhook.url, session=session)
+            if not isinstance(chat, telethon.types.User):
+                dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=ifp, wait=True)
+            elif (await tgclient.get_me()).id == event.chat_id:
+                dmessage = await webhook.send(webhookmsg, username=f'Saved Messages', avatar_url=ifp, wait=True)
+            elif isinstance(chat, telethon.types.User):
+                dmessage = await webhook.send(webhookmsg, username=f'{chat.first_name} {chat.last_name} @{ent.username}', avatar_url=ifp, wait=True)
+            else:
+                dmessage = await webhook.send(webhookmsg, username=f'Invalid channel', avatar_url=ifp, wait=True)
+
+
 @tgevents.register(tgevents.NewMessage())
 async def on_message(event):
     sqlsession = sqlsessionmaker()
     chat = await event.get_chat()
     tgclient = event.client
+
+    if event.message.grouped_id:
+        return # albums will break
 
     if event.chat_id == 777000 or event.sender_id == 777000:
         return # don't send anything from official telegram system channel either
@@ -330,6 +388,7 @@ async def main():
     async with telethon.TelegramClient(settings.telegram.sessionfile, settings.telegram.api_id, settings.telegram.api_hash) as tgclient:
         session = sqlsessionmaker()
 
+        tgclient.add_event_handler(on_album)
         tgclient.add_event_handler(on_message)
 
         logger.info("Telethon client started, checking chats list..")
