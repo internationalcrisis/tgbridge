@@ -55,7 +55,11 @@ async def upload_media(filename):
     """Upload file named `filename` which is in the configured cache directory to configured storage, then delete the cached copy after upload."""
     if settings.storage.local.enabled:
         shutil.copyfile(settings.storage.cache_dir+filename, slash_join(settings.storage.local.file_prefix, filename))
-        os.remove(settings.storage.cache_dir+filename)
+
+        try:
+            os.remove(settings.storage.cache_dir+filename)
+        except FileNotFoundError:
+            pass # If it doesn't exist, we don't need to do anything about it.
 
         # {url_prefix}/{filename}
         url = slash_join(settings.storage.local.url_prefix, filename)
@@ -84,7 +88,10 @@ async def upload_media(filename):
         else:
             logger.debug(f"File \"{os.path.join(settings.storage.b2.file_prefix, filename)}\" already exists on B2 Backblaze.")
 
-        os.remove(os.path.join(settings.storage.cache_dir, filename))
+        try:
+            os.remove(os.path.join(settings.storage.cache_dir, filename))
+        except FileNotFoundError:
+            pass # If it doesn't exist, we don't need to do anything about it.
 
         # {url_prefix}/file/{bucket.name}/{url_prefix}{filename}
         url = slash_join(settings.storage.b2.url_prefix, "/file/"+bucket.name, settings.storage.b2.file_prefix, filename)
