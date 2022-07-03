@@ -12,6 +12,8 @@ import aiohttp
 import asyncio
 import telethon
 
+# pylint: disable=missing-class-docstring, missing-function-docstring, invalid-name
+
 config = yaml.safe_load(open('config.yml', mode="r"))
 
 sqlengine = create_engine(config['dburl'])

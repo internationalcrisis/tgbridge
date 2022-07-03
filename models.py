@@ -9,6 +9,8 @@ db = declarative_base()
 # TODO: consider allowing multiple watchgroups per channel
 # TODO: consider per-guild user watchgroups
 
+# pylint: disable=missing-class-docstring, missing-function-docstring, invalid-name
+
 dwh2wg_association_table = Table('dwh2wg_association', db.metadata,
     Column('webhookid', ForeignKey('dwebhook.id'), primary_key=True),
     Column('watchgroupid', ForeignKey('tgwatchgroup.id'), primary_key=True)
@@ -28,6 +30,7 @@ class Webhook(db):
     # TODO: mandate that webhooks must be added from the same server they were created from
     # TODO: might remove serverid entirely instead
     # TODO: change watched to channels
+    # TODO: id should be an integer
     id = Column(String(128), primary_key=True, server_default=text("gen_random_uuid()"))
     url = Column(String(128), nullable=False, unique=True)  # The webhook.
     serverid = Column(BigInteger, nullable=False)  # Server that created this webhook.
