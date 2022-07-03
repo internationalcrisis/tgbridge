@@ -157,6 +157,98 @@ def is_watched(message):
     session.close()
     return outhooks
 
+async def format_forwarding(event):
+    if event.forward:
+        # Accounts which hide their account link in forwards will have a name but no ID.
+        if event.forward.from_name and not event.forward.from_id:
+            return f'{event.forward.from_name} (Hidden Account)'
+        # Accounts that allow passing their account link in forwards will have an attached PeerUser.
+        # In this context, the username is the account link.
+        elif isinstance(event.forward.from_id, telethon.types.PeerUser):
+            ent = await event.forward.get_sender()
+            fwname = "Forwarded from"
+
+            if ent.first_name:
+                fwname += " "+ent.first_name
+            if ent.last_name:
+                fwname += " "+ent.last_name
+            if ent.username:
+                fwname += " @"+ent.username
+
+            return fwname
+        # Channels will have an attached ID.
+        elif isinstance(event.forward.from_id, telethon.types.PeerChannel):
+            ent = await event.forward.get_chat()
+            # The channel has a channel link (public)
+            # In this context, the username is the channel link.
+            if ent.username:
+                if event.forward.post_author:
+                    # The channel will show the author of the message instead of only the channel name.
+                    return f'Forwarded from [{ent.title}](<https://t.me/{ent.username}> "Join this channel on Telegram") ({event.forward.post_author})'
+                else:
+                    return f'Forwarded from [{ent.title}](<https://t.me/{ent.username}> "Join this channel on Telegram")'
+            else:
+                # The channel has no link (private)
+                return f'Forwarded from {ent.title} (Private Channel)'
+
+
+# TODO: Might have an option to disable URL previews because most people who use Telegram
+# are used to not having them and will do it themselves
+# which may conflict with having URL previews
+async def format_message(message):
+    text = message.message
+    if message.entities:
+        for entity in message.entities:
+            # Telegram uses UTF-16 codepoint pairs so we can't just slice it.
+            # Massive thanks to python-telegram-bot for having information about this.
+            if sys.maxunicode == 0xFFFF:
+                entity_text = message.raw_text[entity.offset : entity.offset + entity.length]
+
+            entity_text = message.raw_text.encode("utf-16-le")
+            entity_text = entity_text[entity.offset * 2 : (entity.offset + entity.length) * 2]
+            entity_text = entity_text.decode("utf-16-le")
+
+            # "https://example.com" creates these. Telegram will automatically add "https://" to URLs without a scheme.
+            if isinstance(entity, telethon.types.MessageEntityUrl):
+                if "://" not in text:  # Don't add https:// if it's already there
+                    text = text.replace(entity_text, "https://"+entity_text)
+
+            # Special hyperlinks, Ctrl-K creates these on Telegram desktop.
+            elif isinstance(entity, telethon.types.MessageEntityTextUrl):
+                text = text.replace(entity_text, f"[{entity_text}]({entity.url})")
+
+            # "@username" creates these.
+            elif isinstance(entity, telethon.types.MessageEntityMention):
+                text = text.replace(entity_text, f"[{entity_text}](https://t.me/{entity_text})")
+
+            # Don't know what creates these, mentioning user who doesn't have username?
+            elif isinstance(entity, telethon.types.MessageEntityMentionName):
+                text = text.replace(entity_text, f"[{entity_text}](https://t.me/{entity.user_id})")
+
+            # "``` ```" creates these. Standard Markdown code block.
+            elif isinstance(entity, telethon.types.MessageEntityPre):
+                text = text.replace(entity_text, f"```{entity.language}\n{entity_text}```")
+
+            # These exist for making sure that the Telegram markdown syntax is translated to Discord's syntax,
+            # and are self-explanatory as a result.
+            elif isinstance(entity, telethon.types.MessageEntityBold):
+                text = text.replace(entity_text, f"**{entity_text}**")
+            elif isinstance(entity, telethon.types.MessageEntityItalic):
+                text = text.replace(entity_text, f"*{entity_text}*")
+            elif isinstance(entity, telethon.types.MessageEntityCode):
+                text = text.replace(entity_text, f"`{entity_text}`")
+            elif isinstance(entity, telethon.types.MessageEntityStrike):
+                text = text.replace(entity_text, f"~~{entity_text}~~")
+            elif isinstance(entity, telethon.types.MessageEntityUnderline):  # parsed as --text-- on telegram
+                text = text.replace(entity_text, f"__{entity_text}__")
+
+            # # username@domain.tld syntax creates these, but they are not supported on Discord.
+            # elif isinstance(entity, telethon.types.MessageEntityEmail):
+            #     text = text.replace(entity_text, f"[{entity_text}](mailto:{entity_text})")
+            else:
+                logger.warn(f'Invalid MessageEntity type {type(entity)}: {entity_text}')
+
+    return text
             webhook = Webhook.from_url(webhook.url, session=session)
 @tgevents.register(tgevents.NewMessage())
 async def on_message(event):
@@ -179,6 +271,8 @@ async def on_message(event):
 
     webhooks = [webhook for webhook in is_watched(event)] # get webhooks that are interested in this message
 
+    ifp = await download_profile_photo(event)
+
     for webhook in webhooks:
         async with aiohttp.ClientSession() as session:
             if sqlsession.query(DiscordMessage).filter(DiscordMessage.tgmessageid == tmsg.id, DiscordMessage.webhookid == webhook.id).count() >= 1:
@@ -188,98 +282,29 @@ async def on_message(event):
             fwname = ''
             webhookmsg = ''
 
-            ifp = await download_profile_photo(event)
-
             # forward handling
             try:
-                if event.message.forward and event.message.forward.from_id:
-                    ent = await event.message.forward.get_chat()
-
-                    if ent.title:
-                        if ent.username:
-                            fwname = f'Forwarded from [{ent.title}](https://t.me/{ent.username} "Join this channel on Telegram")'
-                        else:
-                            fwname = f'Forwarded from {ent.title} (Hidden Channel)'
-                    elif ent.first_name and ent.last_name:
-                        fwname = f'Forwarded from {ent.first_name} {ent.last_name} @{ent.username}'
-                    else:
-                        fwname = "Forwarded from "+str(ent.first_name)
-                        fwname += " "+str(ent.last_name) if ent.last_name else "" # formatted last name
-                elif event.message.forward and not event.message.forward.from_id:
-                    fwname = f'{event.message.forward.from_name} (Hidden Account)'
+                fwname = await format_forwarding(event)
             except Exception as err:
                 fwname = "**An exception has occurred fetching the origin channel.**"
 
-            if fwname and event.message.message:  # forward AND message
-                webhookmsg += f"{fwname}\n\n{event.message.message}"
-            elif fwname:  # only forward
-                webhookmsg += f"{fwname}"
-            elif event.message.message:  # only message
-                webhookmsg += f"{event.message.message}"
-
             # Message entity markdown handling
-            # Markdown hyperlink syntax is NOT supported on Telegram, but is supported on Discord (for bots and webhooks only).
-            # This escapes them so they aren't parsed as Markdown hyperlinks.
-            webhookmsg = re.sub(r'\[(.*?)\]\((.*?)\)', r'\(\1\)\[\2\]', webhookmsg)
-
-            if event.message.entities:
-                for entity in event.message.entities:
-                    start = entity.offset
-                    end = start + entity.length
-                    
-                    # "https://example.com" creates these. Telegram will automatically add "https://" to URLs without a scheme.
-                    if isinstance(entity, telethon.types.MessageEntityUrl):
-                        if "://" not in webhookmsg:  # Don't add https:// if it's already there
-                            webhookmsg = webhookmsg.replace(event.message.message[start:end], "https://"+event.message.message[start:end])
-
-                    # Special hyperlinks, Ctrl-K creates these on Telegram desktop.
-                    elif isinstance(entity, telethon.types.MessageEntityTextUrl):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}]({entity.url})")
-                    
-                    # "@username" creates these.
-                    elif isinstance(entity, telethon.types.MessageEntityMention):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](https://t.me/{event.message.message[start+1:end]})")
-                    
-                    # Don't know what creates these, mentioning user who doesn't have username?
-                    elif isinstance(entity, telethon.types.MessageEntityMentionName):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](https://t.me/{entity.user_id})")
-                    
-                    # "``` ```" creates these. Standard Markdown code block.
-                    elif isinstance(entity, telethon.types.MessageEntityPre):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"```{entity.language}\n{event.message.message[start:end]}```")
-
-                    # These exist for making sure that the Telegram markdown syntax is translated to Discord's syntax,
-                    # and are self-explanatory as a result.
-                    elif isinstance(entity, telethon.types.MessageEntityBold):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"**{event.message.message[start:end]}**")
-                    elif isinstance(entity, telethon.types.MessageEntityItalic):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"*{event.message.message[start:end]}*")
-                    elif isinstance(entity, telethon.types.MessageEntityCode):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"`{event.message.message[start:end]}`")
-                    elif isinstance(entity, telethon.types.MessageEntityStrike):
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"~~{event.message.message[start:end]}~~")
-                    elif isinstance(entity, telethon.types.MessageEntityUnderline):  # parsed as --text-- on telegram
-                        webhookmsg = webhookmsg.replace(event.message.message[start:end], f"__{event.message.message[start:end]}__")
-
-                    # # username@domain.tld syntax creates these, but they are not supported on Discord.
-                    # elif isinstance(entity, telethon.types.MessageEntityEmail):
-                    #     webhookmsg = webhookmsg.replace(event.message.message[start:end], f"[{event.message.message[start:end]}](mailto:{event.message.message[start:end]})")
-                    else:
-                        logger.warn(f'Invalid MessageEntity type {type(entity)}: {event.message.message[start:end]}')
+            content = await format_message(event.message)
 
             # file download handling
-            if event.message.file and not event.message.web_preview:
-                if event.message.file.ext == ".jpe":
-                    mfpext = ".jpg"
-                else:
-                    mfpext = event.message.file.ext
             url = await download_media_message(tgclient, event.message)
 
+            webhookmsg = content
 
-                webhookmsg += f'\n\n{url}'
+            if fwname:
+                webhookmsg = fwname + "\n\n" + webhookmsg
+
+            if url:
+                webhookmsg = webhookmsg + '\n\n' + url
 
             # final webhook request handling
             username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
+            ent = await event.message.get_chat()
             webhook = Webhook.from_url(webhook.url, session=session)
             if not isinstance(chat, telethon.types.User):
                 dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=ifp, wait=True)
