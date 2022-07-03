@@ -45,7 +45,7 @@ def slash_join(*args):
     '''
     Joins a set of strings with a slash (/) between them. Useful for creating URLs.
     If the strings already have a trailing or leading slash, it is ignored.
-    Note that the python's urllib.parse.urljoin() does not offer this functionality. 
+    Note that the python's urllib.parse.urljoin() does not offer this functionality.
 
     https://codereview.stackexchange.com/questions/175421/joining-strings-to-form-a-url
     '''
@@ -106,7 +106,7 @@ async def download_media(event):
     if event.message.file and not event.message.web_preview:
         # These are all JPEGs, renaming them makes it easier for everyone.
         # .jpe is the only one seen on Telegram due to a Telegram quirk though.
-        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]: 
+        if event.message.file.ext in [".jpe", ".jpeg", ".jfif"]:
             mfpext = ".jpg"
         else:
             mfpext = event.message.file.ext
