@@ -1,6 +1,6 @@
 import asyncio
 import telethon
-from discord import Webhook, AsyncWebhookAdapter
+from discord import Webhook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import yaml
@@ -151,6 +151,7 @@ def is_watched(message):
     session.close()
     return outhooks
 
+            webhook = Webhook.from_url(webhook.url, session=session)
 @tgevents.register(tgevents.NewMessage())
 async def on_message(event):
     sqlsession = sqlsessionmaker()
@@ -273,7 +274,7 @@ async def on_message(event):
 
             # final webhook request handling
             username = chat.title if chat.title else f'{chat.first_name} {chat.last_name}'
-            webhook = Webhook.from_url(webhook.url, adapter=AsyncWebhookAdapter(session))
+            webhook = Webhook.from_url(webhook.url, session=session)
             if not isinstance(chat, telethon.types.User):
                 dmessage = await webhook.send(webhookmsg, username=f'{chat.title}', avatar_url=ifp, wait=True)
             elif (await tgclient.get_me()).id == event.chat_id:
